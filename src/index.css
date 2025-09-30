@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal tokens used by the app */
+@layer utilities {
+  .text-muted-foreground { @apply text-gray-500; }
+  .bg-muted\/40 { background-color: rgb(243 244 246 / 0.4); } /* gray-100 @ 40% */
+  .fill-current { fill: currentColor; }
+}
