@@ -25,15 +25,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          # NOTE: do NOT set "cache: npm" unless you commit a lockfile
 
-      - name: Install deps
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+      - name: Install deps (no lockfile)
+        run: npm install
 
       - name: Build
         run: npm run build
