@@ -54,14 +54,6 @@ const normalizeDocType = (t: unknown) => {
   if (s.includes("PRESDOCU") || s.includes("PRESIDENT")) return "PRESDOCU";
   return null;
 };
-// Presidential subtype helpers
-const isExecutiveOrder = (d: any) => {
-  const t = String(d?.presidential_document_type || '')
-    .toLowerCase()
-    .replace(/\s+/g, '_');
-  return t === 'executive_order';
-};
-
 const tickCfg = (u: string) => {
   switch ((u || "months").toLowerCase()) {
     case "days": return { iv: d3.timeDay, fmt: "%b %d" } as const;
@@ -147,12 +139,7 @@ const getFallbackAgencies = (structureId?: string) => STRUCTURE_AGENCY_SLUGS[Str
 // ------------------------------------------------ Federal Register fetchers ------------------------------------------------
 async function fetchFR({ start, end, filters, skipCfrTitle = false, agencies }: { start: Date; end: Date; filters: any; skipCfrTitle?: boolean; agencies?: string[] }) {
   const [s, e] = normRange(start, end);
-const fields = [
-  "publication_date","effective_on","type","title","document_number","html_url",
-  "agencies","cfr_references","action","abstract",
-  // Presidential details (for Executive Orders)
-  "presidential_document_type","executive_order_number","signing_date"
-];
+  const fields = ["publication_date","effective_on","type","title","document_number","html_url","agencies","cfr_references","action","abstract"];
   const baseParams: Record<string, any> = {
     per_page: 1000,
     order: "newest",
@@ -217,7 +204,6 @@ export default function SnapPolicyTimeline() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [enabledTypes, setEnabledTypes] = useState<{ PRORULE: boolean; RULE: boolean; NOTICE: boolean; PRESDOCU: boolean }>({ PRORULE: true, RULE: true, NOTICE: true, PRESDOCU: true });
-  const [eoOnly, setEoOnly] = useState(false);
   const [includeNoCfr, setIncludeNoCfr] = useState(false);
   const [showNoCfrHelp, setShowNoCfrHelp] = useState(false);
   const [showLegendHelp, setShowLegendHelp] = useState(false);
@@ -231,12 +217,7 @@ export default function SnapPolicyTimeline() {
   // Reset no-CFR toggle if a specific part is chosen; also hide its tooltip
   useEffect(() => { if (filters.cfrPart) { setIncludeNoCfr(false); setShowNoCfrHelp(false); } }, [filters.cfrPart]);
 
-const visibleDocs = useMemo(() => (docs || []).filter((d: any) => {
-  const k = normalizeDocType(d?.type) as keyof typeof enabledTypes | null;
-  if (!k || !enabledTypes[k]) return false;
-  if (k === 'PRESDOCU' && eoOnly) return isExecutiveOrder(d);
-  return true;
-}), [docs, enabledTypes, eoOnly]);
+  const visibleDocs = useMemo(() => (docs || []).filter((d: any) => { const k = normalizeDocType(d?.type) as keyof typeof enabledTypes | null; return k ? Boolean(enabledTypes[k]) : false; }), [docs, enabledTypes]);
 
   // Fetch logic
   const load = async (opts?: { includeNoCfrOverride?: boolean }) => {
@@ -282,21 +263,20 @@ const visibleDocs = useMemo(() => (docs || []).filter((d: any) => {
     const map = new Map<string, { pr: number; ru: number; no: number; pd: number }>(bins.map((dt) => [key(dt), init()]));
     for (const doc of docs || []) {
       if (!doc || !doc._pub) continue; const kind = normalizeDocType(doc.type) as "PRORULE"|"RULE"|"NOTICE"|"PRESDOCU"|null; if (!kind) continue; if (!enabledTypes[kind]) continue;
-      if (kind === 'PRESDOCU' && eoOnly && !isExecutiveOrder(doc)) continue;
       const k = key(interval.floor(doc._pub)); const base = map.get(k) || init();
       const cur = { pr: +base.pr||0, ru: +base.ru||0, no: +base.no||0, pd: +base.pd||0 };
       if (kind === "PRORULE") cur.pr += 1; else if (kind === "RULE") cur.ru += 1; else if (kind === "NOTICE") cur.no += 1; else if (kind === "PRESDOCU") cur.pd += 1;
       map.set(k, cur);
     }
     return bins.map((dt) => { const c = map.get(key(dt)) || init(); const pr = +c.pr||0, ru=+c.ru||0, no=+c.no||0, pd=+c.pd||0; return { date: dt, pr, ru, no, pd, tot: pr+ru+no+pd }; });
-  }, [docs, start, end, zoomUnit, bucket, enabledTypes, eoOnly]);
+  }, [docs, start, end, zoomUnit, bucket, enabledTypes]);
 
   // Precompute bucket → docs (parity with chart)
   const bucketMap = useMemo(() => {
     const { iv } = tickCfg(zoomUnit); const interval = bucket ? iv : d3.timeDay; const map = new Map<number, any[]>();
-    for (const d of docs || []) { if (!d || !d._pub) continue; const kType = normalizeDocType(d.type) as keyof typeof enabledTypes | null; if (!kType || !enabledTypes[kType]) continue; if (kType === 'PRESDOCU' && eoOnly && !isExecutiveOrder(d)) continue; const k = +interval.floor(d._pub); const arr = map.get(k); if (arr) arr.push(d); else map.set(k, [d]); }
+    for (const d of docs || []) { if (!d || !d._pub) continue; const kType = normalizeDocType(d.type) as keyof typeof enabledTypes | null; if (!kType || !enabledTypes[kType]) continue; const k = +interval.floor(d._pub); const arr = map.get(k); if (arr) arr.push(d); else map.set(k, [d]); }
     return map;
-  }, [docs, zoomUnit, bucket, enabledTypes, eoOnly]);
+  }, [docs, zoomUnit, bucket, enabledTypes]);
   const bucketDocs = useMemo(() => {
     if (!active) return [] as any[]; const { iv } = tickCfg(zoomUnit); const interval = bucket ? iv : d3.timeDay; const key = +interval.floor(active);
     const arr = bucketMap.get(key) || []; return arr.slice().sort((a: any, b: any) => String(a.type).localeCompare(String(b.type)));
@@ -470,7 +450,6 @@ const visibleDocs = useMemo(() => (docs || []).filter((d: any) => {
         <label className="flex items-center gap-1"><input type="checkbox" checked={enabledTypes.RULE} onChange={(e)=>setEnabledTypes(v=>({ ...v, RULE: e.target.checked }))} /> Rule</label>
         <label className="flex items-center gap-1"><input type="checkbox" checked={enabledTypes.NOTICE} onChange={(e)=>setEnabledTypes(v=>({ ...v, NOTICE: e.target.checked }))} /> Notice</label>
         <label className="flex items-center gap-1"><input type="checkbox" checked={enabledTypes.PRESDOCU} onChange={(e)=>setEnabledTypes(v=>({ ...v, PRESDOCU: e.target.checked }))} /> Presidential Document</label>
-        <label className={`flex items-center gap-1 ml-2 ${enabledTypes.PRESDOCU ? '' : 'opacity-50 pointer-events-none'}`}><input type="checkbox" checked={eoOnly} onChange={(e)=>setEoOnly(e.target.checked)} disabled={!enabledTypes.PRESDOCU}/> Executive Orders only</label>
         <button type="button" className="inline-flex items-center justify-center h-5 w-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 cursor-pointer" aria-label="Document type definitions" aria-expanded={showLegendHelp} onClick={()=>setShowLegendHelp(v=>!v)}>
           <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5" aria-hidden="true"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16Zm0-11a 1 1 0 110-2 1 1 0 010 2Zm-1 2.5a 1 1 0 112 0V14a1 1 0 11-2 0v-4.5Z" clipRule="evenodd" /></svg>
         </button>
@@ -500,17 +479,9 @@ const visibleDocs = useMemo(() => (docs || []).filter((d: any) => {
             "Update"
           )}
         </button>
-const pres = visibleDocs.filter(d => normalizeDocType(d.type) === "PRESDOCU");
-const eos  = pres.filter(isExecutiveOrder);
-
-<span>
-  Showing {visibleDocs.length.toLocaleString()} of {docs.length.toLocaleString()} documents ·
-  {" "}Proposed Rule: {visibleDocs.filter(d=>normalizeDocType(d.type)==="PRORULE").length},
-  {" "}Rule: {visibleDocs.filter(d=>normalizeDocType(d.type)==="RULE").length},
-  {" "}Notice: {visibleDocs.filter(d=>normalizeDocType(d.type)==="NOTICE").length},
-  {" "}Presidential: {pres.length}{eos.length ? ` (EOs: ${eos.length})` : ""}
-</span>
-
+        <span>
+          Showing {visibleDocs.length.toLocaleString()} of {docs.length.toLocaleString()} documents · Proposed Rule: {docs.filter((d)=>normalizeDocType(d.type)==="PRORULE").length}, Rule: {docs.filter((d)=>normalizeDocType(d.type)==="RULE").length}, Notice: {docs.filter((d)=>normalizeDocType(d.type)==="NOTICE").length}, Presidential: {docs.filter((d)=>normalizeDocType(d.type)==="PRESDOCU").length}
+        </span>
       </div>
 
       {/* Chart */}
@@ -569,18 +540,6 @@ const eos  = pres.filter(isExecutiveOrder);
               <div><span className="font-medium">Type:</span> {normalizeDocType(modalDoc.type)==="PRORULE"?"Proposed Rule":normalizeDocType(modalDoc.type)==="RULE"?"Rule":normalizeDocType(modalDoc.type)==="NOTICE"?"Notice":"Presidential Document"}</div>
               <div><span className="font-medium">Agency:</span> {(Array.isArray(modalDoc.agencies) ? modalDoc.agencies.map((a: any)=>a.name).join(", ") : "—")}</div>
               <div><span className="font-medium">Action:</span> {modalDoc.action || "—"}</div>
-              {normalizeDocType(modalDoc.type)==="PRESDOCU" && (
-  <>
-    <div><span className="font-medium">Presidential subtype:</span> {modalDoc.presidential_document_type || "—"}</div>
-    {modalDoc.executive_order_number ? (
-      <div><span className="font-medium">EO number:</span> {modalDoc.executive_order_number}</div>
-    ) : null}
-    {modalDoc.signing_date ? (
-      <div><span className="font-medium">Signing date:</span> {modalDoc.signing_date}</div>
-    ) : null}
-  </>
-)}
-
               <div><span className="font-medium">Summary:</span> {modalDoc.summary || modalDoc.abstract || "—"}</div>
               <div className="pt-2">
                 {frDocUrl(modalDoc) ? (
